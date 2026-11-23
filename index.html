@@ -38,6 +38,7 @@ td img{width:42px;height:56px;object-fit:cover;border-radius:6px;display:block}
 .row{display:flex;gap:8px}.row>*{flex:1}
 .chip{border:2px solid var(--bd);background:var(--card);color:var(--tx);border-radius:99px;padding:8px 14px;font:600 14px inherit;font-family:inherit;cursor:pointer;margin:0 6px 6px 0}.chip.on{background:var(--or);border-color:var(--or);color:#fff}.gl{font-size:13px;font-weight:700;color:var(--red);margin:10px 0 6px}.hc{text-align:right;line-height:1.2;flex:none}.hc b{display:block;font-size:19px;font-variant-numeric:tabular-nums}.hc span{font-size:11px;opacity:.9}.clk{font-size:40px;font-weight:800;text-align:center;color:var(--red);font-variant-numeric:tabular-nums;line-height:1.1}.clkd{text-align:center;color:var(--mut);font-size:14px;margin-bottom:8px}header h1{font-size:16px}.hide{display:none}.pill{display:inline-block;background:var(--or);color:#fff;border-radius:99px;padding:2px 10px;font-size:12px}
 .mini{border:0;border-radius:8px;padding:6px 10px;font:600 12px inherit;font-family:inherit;cursor:pointer;background:var(--bd);color:var(--tx);margin:2px 0;display:block;white-space:nowrap}.mini.d{background:var(--red);color:#fff}.mo{position:fixed;inset:0;background:rgba(0,0,0,.65);display:grid;place-items:center;z-index:20;padding:16px}.mb{background:var(--card);border-radius:16px;padding:18px;max-width:420px;width:100%;max-height:90vh;overflow:auto}.mb img{width:100%;border-radius:12px;display:block}.mo.hide{display:none}td img{cursor:pointer}
+td img{background:var(--bd);min-height:56px}
 </style>
 </head>
 <body>
@@ -129,6 +130,7 @@ td img{width:42px;height:56px;object-fit:cover;border-radius:6px;display:block}
         <div><label for="gk">Kelas</label><select id="gk"></select></div>
       </div>
       <p class="hint" id="gcount"></p>
+      <p class="hint" id="sync"></p>
       <div class="row">
         <button class="btn alt" id="delfotos" style="margin-top:8px">Hapus semua foto</button>
         <button class="btn" id="delall" style="margin-top:8px">Hapus semua data</button>
@@ -191,21 +193,25 @@ td img{width:42px;height:56px;object-fit:cover;border-radius:6px;display:block}
     window.scrollTo(0,0);
   }
 
-  /* Storage: shared db when available, localStorage fallback */
+  /* Penyimpanan: Firebase Realtime Database (REST) jika DB_URL diisi, jika kosong pakai localStorage */
+  var DB_URL="https://absensidkv-29484-default-rtdb.asia-southeast1.firebasedatabase.app";
+  DB_URL=DB_URL.replace(/\/+$/,"");
+  var remote=!!DB_URL, fotoCache={}, pend={};
+  function api(m,p,b){return fetch(DB_URL+p+".json",{method:m,headers:{"Content-Type":"application/json"},body:b===undefined?undefined:JSON.stringify(b)}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json()})}
   function loadLocal(){try{records=JSON.parse(localStorage.getItem(LS)||"[]")}catch(e){records=[]}}
   function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(records))}catch(e){}}
-  loadLocal(); renderAll();
-  (async function(){
-    try{
-      if(!window.claude)return;
-      db=await claude.use("db");
-      if(!db)return;
-      col=db.collection("absensi");
-      col.orderBy("ts","desc").limit(300).onSnapshot(function(s){
-        records=s.docs.map(function(d){return d.data()});renderAll();
-      },function(){});
-    }catch(e){db=null}
-  })();
+  function fotoOf(r){return r.foto||fotoCache[r.id]||""}
+  function setSync(t,bad){var e=$("sync");if(e){e.textContent=t;e.style.color=bad?"var(--red)":""}}
+  function loadRemote(){
+    if(!remote)return Promise.resolve();
+    return api("GET","/absensi").then(function(d){
+      records=d?Object.keys(d).map(function(k){return d[k]}).sort(function(a,b){return b.ts-a.ts}):[];
+      setSync("Terhubung ke database · diperbarui "+fmtT(Date.now())+" WITA");
+    }).catch(function(){setSync("Gagal terhubung ke database. Periksa internet dan pengaturan database.",true)}).then(renderAll);
+  }
+  if(!remote)loadLocal();
+  setInterval(function(){if(admin&&remote&&document.visibilityState==="visible")loadRemote()},8000);
+  renderAll();
 
   /* Step 1-2: form */
   $("start").onclick=function(){show("v-form")};
@@ -269,11 +275,11 @@ td img{width:42px;height:56px;object-fit:cover;border-radius:6px;display:block}
   $("send").onclick=async function(){
     var b=$("send");b.disabled=true;$("perr").textContent="";
     var rec={id:"a"+now+Math.random().toString(36).slice(2,6),nama:ident.nama,kelas:ident.kelas,
-      namaKey:norm(ident.nama),kelasKey:norm(ident.kelas),ts:now,foto:photo,lat:geo?geo.lat:null,lng:geo?geo.lng:null,acc:geo?geo.acc:null};
+      namaKey:norm(ident.nama),kelasKey:norm(ident.kelas),ts:now,hasFoto:true,lat:geo?geo.lat:null,lng:geo?geo.lng:null,acc:geo?geo.acc:null};
     try{
-      if(col){await col.doc(rec.id).set(rec)}
-      else{records.unshift(rec);saveLocal();renderAll()}
-      $("dtxt").textContent=ident.nama+" ("+ident.kelas+") · "+fmtD(now)+", "+fmtT(now)+(col?"":" · tersimpan di perangkat ini");
+      if(remote){await api("PUT","/foto/"+rec.id,photo);await api("PUT","/absensi/"+rec.id,rec)}
+      else{records.unshift(Object.assign({foto:photo},rec));saveLocal();renderAll()}
+      $("dtxt").textContent=ident.nama+" ("+ident.kelas+") · "+fmtD(now)+", "+fmtT(now)+(remote?"":" · tersimpan di perangkat ini");
       show("v-done");
     }catch(e){$("perr").textContent="Gagal mengirim. Coba lagi."}
     b.disabled=false;
@@ -297,7 +303,7 @@ td img{width:42px;height:56px;object-fit:cover;border-radius:6px;display:block}
     $("mno").onclick=closeM;$("myes").onclick=function(){closeM();ok()};openM();
   }
   function viewFoto(r){
-    $("mc").innerHTML='<img alt="Foto absensi" src="'+r.foto+'"><p style="margin:8px 0 0"><b>'+esc(r.nama)+'</b> · '+esc(r.kelas)+'<br><span class="hint">'+fmtD(r.ts)+', '+fmtT(r.ts)+'</span></p>';
+    $("mc").innerHTML='<img alt="Foto absensi" src="'+fotoOf(r)+'"><p style="margin:8px 0 0"><b>'+esc(r.nama)+'</b> · '+esc(r.kelas)+'<br><span class="hint">'+fmtD(r.ts)+', '+fmtT(r.ts)+'</span></p>';
     $("mbtns").innerHTML='<button class="btn" id="mno" style="margin:0">Tutup</button>';
     $("mno").onclick=closeM;openM();
   }
@@ -308,33 +314,52 @@ td img{width:42px;height:56px;object-fit:cover;border-radius:6px;display:block}
   };
   $("pin").onkeydown=function(e){if(e.key==="Enter")$("alogin").click()};
   $("alogout").onclick=function(){admin=false;setAdmin()};
-  function setAdmin(){$("a-login").classList.toggle("hide",admin);$("a-panel").classList.toggle("hide",!admin);renderGuru()}
+  function setAdmin(){$("a-login").classList.toggle("hide",admin);$("a-panel").classList.toggle("hide",!admin);renderGuru();if(admin)loadRemote()}
 
   function shown(){
     var d=$("gd").value,q=$("gk").value;
     return records.filter(function(r){return (!d||dayKey(r.ts)===d)&&(!q||r.kelasKey===q)});
   }
+  var BLANK="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
   function renderGuru(){
     if(!admin)return;
     var list=shown();
-    $("gcount").textContent=list.length+" absensi · "+list.filter(function(r){return r.foto}).length+" dengan foto";
+    $("gcount").textContent=list.length+" absensi · "+list.filter(function(r){return r.hasFoto||r.foto}).length+" dengan foto";
+    if(!remote)setSync("Mode lokal: data hanya tersimpan di perangkat ini. Sambungkan database agar absensi dari HP siswa muncul di sini.",true);
     $("gbody").innerHTML=list.map(function(r){
-      return "<tr><td>"+(r.foto?'<img alt="" src="'+r.foto+'" data-a="view" data-id="'+r.id+'">':"<span class=hint>-</span>")+"</td><td>"+esc(r.nama)+"</td><td><span class=pill>"+esc(r.kelas)+"</span></td><td>"+fmtT(r.ts)+"</td><td>"+locCell(r)+"</td><td>"
-        +(r.foto?'<button class="mini" data-a="foto" data-id="'+r.id+'">Hapus foto</button>':"")
+      var hf=r.hasFoto||r.foto;
+      return "<tr><td>"+(hf?'<img alt="" src="'+(fotoOf(r)||BLANK)+'" data-a="view" data-id="'+r.id+'">':"<span class=hint>-</span>")+"</td><td>"+esc(r.nama)+"</td><td><span class=pill>"+esc(r.kelas)+"</span></td><td>"+fmtT(r.ts)+"</td><td>"+locCell(r)+"</td><td>"
+        +(hf?'<button class="mini" data-a="foto" data-id="'+r.id+'">Hapus foto</button>':"")
         +'<button class="mini d" data-a="del" data-id="'+r.id+'">Hapus data</button></td></tr>';
     }).join("")||'<tr><td colspan="6" class="hint">Belum ada absensi.</td></tr>';
+    loadFotos(list);
+  }
+  function loadFotos(list){
+    if(!remote)return;
+    list.forEach(function(r){
+      if(!r.hasFoto||fotoCache[r.id]||pend[r.id])return;
+      pend[r.id]=1;
+      api("GET","/foto/"+r.id).then(function(f){
+        delete pend[r.id];
+        if(f){fotoCache[r.id]=f;var im=document.querySelector('img[data-id="'+r.id+'"]');if(im)im.src=f}
+      }).catch(function(){delete pend[r.id]});
+    });
   }
   function renderAll(){renderGuru()}
 
-  async function upd(r,patch){
+  async function delFoto(r){
     try{
-      if(col){await col.doc(r.id).update(patch)}else{Object.assign(r,patch);saveLocal()}
-    }catch(e){alert("Gagal menyimpan perubahan.")}
+      if(remote){await api("DELETE","/foto/"+r.id);await api("PATCH","/absensi/"+r.id,{hasFoto:false})}
+      else{r.foto=null;saveLocal()}
+      r.hasFoto=false;delete fotoCache[r.id];
+    }catch(e){alert("Gagal menghapus foto.")}
     renderAll();
   }
   async function del(r){
     try{
-      if(col){await col.doc(r.id).delete()}else{records=records.filter(function(x){return x.id!==r.id});saveLocal()}
+      if(remote){await api("DELETE","/absensi/"+r.id);await api("DELETE","/foto/"+r.id)}
+      records=records.filter(function(x){return x.id!==r.id});delete fotoCache[r.id];
+      if(!remote)saveLocal();
     }catch(e){alert("Gagal menghapus.")}
     renderAll();
   }
@@ -342,14 +367,14 @@ td img{width:42px;height:56px;object-fit:cover;border-radius:6px;display:block}
     var b=e.target.closest("[data-a]");if(!b)return;
     var r=records.filter(function(x){return x.id===b.dataset.id})[0];if(!r)return;
     var a=b.dataset.a;
-    if(a==="view")viewFoto(r);
-    else if(a==="foto")ask("Hapus foto "+r.nama+"? Data absensinya tetap tersimpan.",function(){upd(r,{foto:null})});
+    if(a==="view"){if(fotoOf(r))viewFoto(r)}
+    else if(a==="foto")ask("Hapus foto "+r.nama+"? Data absensinya tetap tersimpan.",function(){delFoto(r)});
     else ask("Hapus seluruh data absensi "+r.nama+" ("+r.kelas+")?",function(){del(r)});
   };
   $("delfotos").onclick=function(){
-    var l=shown().filter(function(r){return r.foto});
+    var l=shown().filter(function(r){return r.hasFoto||r.foto});
     if(!l.length)return;
-    ask("Hapus "+l.length+" foto yang tampil? Data absensi tetap tersimpan.",async function(){for(var i=0;i<l.length;i++)await upd(l[i],{foto:null})});
+    ask("Hapus "+l.length+" foto yang tampil? Data absensi tetap tersimpan.",async function(){for(var i=0;i<l.length;i++)await delFoto(l[i])});
   };
   $("delall").onclick=function(){
     var l=shown();
