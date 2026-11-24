@@ -74,6 +74,7 @@ td img{background:var(--bd);min-height:56px}
     <p class="hint">Ketik kelas kamu, atau tap pilihan di bawah.</p>
     <div id="chips"></div>
     <div class="err" id="ferr"></div>
+    <p class="hint">Aktifkan Lokasi (GPS) di HP kamu dan pilih Izinkan saat diminta.</p>
     <button class="btn" id="next">Lanjutkan ke Kamera</button>
   </div>
 
@@ -95,6 +96,7 @@ td img{background:var(--bd);min-height:56px}
       <b>Lokasi</b><span id="pg">Mengambil lokasi…</span>
     </div>
     <div class="err" id="perr"></div>
+    <button class="btn alt hide" id="gretry">Coba Lagi Ambil Lokasi</button>
     <button class="btn" id="send">Kirim Absensi</button>
     <button class="btn alt" id="retake">Foto Ulang</button>
   </div>
@@ -222,7 +224,7 @@ td img{background:var(--bd);min-height:56px}
     var kk=KELAS.filter(function(c){return norm(c)===norm(k)})[0];
     if(!kk){$("ferr").textContent="Kelas tidak dikenal. Pilih salah satu: X, XI, atau XII DKV 1–3.";return}
     $("ferr").textContent="";ident={nama:n,kelas:kk};
-    show("v-cam");startCam();
+    show("v-cam");startCam();locate();
   };
 
   /* Camera */
@@ -257,22 +259,48 @@ td img{background:var(--bd);min-height:56px}
 
   /* Preview + GPS */
   var now=null;
+  var geoBusy=false, geoMsg="";
+  var inApp=/FBAN|FBAV|Instagram|Line\/|WhatsApp|; wv\)|Telegram/i.test(navigator.userAgent);
+  function setGeoUI(){
+    if(geo){$("pg").textContent=geo.lat+", "+geo.lng+" (±"+geo.acc+" m)";geoMsg=""}
+    else if(geoBusy)$("pg").textContent="Mengambil lokasi…";
+    else $("pg").textContent="Belum terdeteksi";
+    $("perr").textContent=(geo||geoBusy)?"":geoMsg;
+    $("send").disabled=!geo;
+    $("gretry").classList.toggle("hide",!!geo||geoBusy);
+  }
+  function geoFail(code){
+    geoBusy=false;
+    geoMsg=code===1?"Izin lokasi ditolak. Ketuk ikon gembok di samping alamat web, pilih Izin, aktifkan Lokasi, lalu tekan Coba Lagi."
+      :code===2?"Lokasi HP mati atau tidak terbaca. Nyalakan Lokasi (GPS) di pengaturan HP, lalu tekan Coba Lagi."
+      :code===3?"Lokasi terlalu lama didapat. Pindah ke tempat terbuka, lalu tekan Coba Lagi."
+      :"Browser ini tidak mendukung lokasi. Buka web lewat Chrome atau Safari.";
+    if(inApp)geoMsg+=" Jika web dibuka dari dalam aplikasi lain (WhatsApp, Instagram), salin link dan buka lewat Chrome.";
+    setGeoUI();
+  }
+  function locate(){
+    if(geoBusy)return;
+    geo=null;geoBusy=true;setGeoUI();
+    if(!navigator.geolocation){geoFail(0);return}
+    function ok(p){geo={lat:+p.coords.latitude.toFixed(6),lng:+p.coords.longitude.toFixed(6),acc:Math.round(p.coords.accuracy)};geoBusy=false;setGeoUI()}
+    navigator.geolocation.getCurrentPosition(ok,function(e){
+      if(e.code===1){geoFail(1);return}
+      navigator.geolocation.getCurrentPosition(ok,function(e2){geoFail(e2.code)},{enableHighAccuracy:false,timeout:20000,maximumAge:60000});
+    },{enableHighAccuracy:true,timeout:15000,maximumAge:30000});
+  }
+  $("gretry").onclick=locate;
   function toPreview(){
-    now=Date.now();geo=null;
+    now=Date.now();
     $("pimg").src=photo;$("pn").textContent=ident.nama;$("pk").textContent=ident.kelas;
     $("pd").textContent=fmtD(now);$("pt").textContent=fmtT(now);
-    $("pg").textContent="Mengambil lokasi…";$("perr").textContent="";
     show("v-prev");
-    if(!navigator.geolocation){$("pg").textContent="GPS tidak tersedia";return}
-    navigator.geolocation.getCurrentPosition(function(p){
-      geo={lat:+p.coords.latitude.toFixed(6),lng:+p.coords.longitude.toFixed(6),acc:Math.round(p.coords.accuracy)};
-      $("pg").textContent=geo.lat+", "+geo.lng+" (±"+geo.acc+" m)";
-    },function(){$("pg").textContent="Lokasi tidak diizinkan";},{enableHighAccuracy:true,timeout:12000});
+    if(!geo&&!geoBusy)locate();else setGeoUI();
   }
   $("retake").onclick=function(){show("v-cam");startCam()};
 
   /* Send */
   $("send").onclick=async function(){
+    if(!geo){setGeoUI();return}
     var b=$("send");b.disabled=true;$("perr").textContent="";
     var rec={id:"a"+now+Math.random().toString(36).slice(2,6),nama:ident.nama,kelas:ident.kelas,
       namaKey:norm(ident.nama),kelasKey:norm(ident.kelas),ts:now,hasFoto:true,lat:geo?geo.lat:null,lng:geo?geo.lng:null,acc:geo?geo.acc:null};
@@ -282,9 +310,9 @@ td img{background:var(--bd);min-height:56px}
       $("dtxt").textContent=ident.nama+" ("+ident.kelas+") · "+fmtD(now)+", "+fmtT(now)+(remote?"":" · tersimpan di perangkat ini");
       show("v-done");
     }catch(e){$("perr").textContent="Gagal mengirim. Coba lagi."}
-    b.disabled=false;
+    setGeoUI();
   };
-  $("again").onclick=function(){$("nama").value="";$("kelas").value="";photo=null;show("v-home")};
+  $("again").onclick=function(){$("nama").value="";$("kelas").value="";photo=null;geo=null;geoBusy=false;show("v-home")};
 
   /* Admin */
   var ADMIN_PIN="150915", admin=false;
